@@ -310,23 +310,29 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 
 func preprocessFPD(request *openrtb2.BidRequest, reqExtPrebid openrtb_ext.ExtRequestPrebid) {
 
+	if reqExtPrebid.Data == nil || reqExtPrebid.BidderConfigs == nil {
+		return
+	}
 	//every entry in ext.prebid.bidderconfig[].bidders would also need to be in ext.prebid.data.bidders or it will be ignored
 	allConfigBidders := make([]string, 0)
 	for _, bidderConfig := range *reqExtPrebid.BidderConfigs {
 		allConfigBidders = append(allConfigBidders, bidderConfig.Bidders...)
 	}
 	//find intersection
+	bidderTable := make(map[string]bool) //boolean just  to check existence of the element in map
+	for _, bidder := range allConfigBidders {
+		bidderTable[bidder] = true
+	}
 
-	/*
+	biddersToProcess := make([]string, 0)
+	for _, bidder := range reqExtPrebid.Data.Bidders {
+		if bidderTable[bidder] {
+			biddersToProcess = append(biddersToProcess, bidder)
+		}
 
-		foreach element e in array A
-	    insert e into hash table H
+	}
 
-		foreach element e in array B
-	    if H contains e
-	        print e
-
-	*/
+	fmt.Println("Bidders: ", biddersToProcess)
 
 	//modify imps
 

@@ -501,14 +501,14 @@ func (deps *endpointDeps) validateEidPermissions(req *openrtb_ext.ExtRequest, al
 func validateFPDConfig(reqExtPrebid openrtb_ext.ExtRequestPrebid) error {
 
 	//Both FPD global and bidder specific permissions are specified
-	if len(reqExtPrebid.Data.Bidders) == 0 && reqExtPrebid.BidderConfigs == nil {
+	if reqExtPrebid.Data == nil && reqExtPrebid.BidderConfigs == nil {
 		return nil
 	}
 
-	if len(reqExtPrebid.Data.Bidders) != 0 && reqExtPrebid.BidderConfigs == nil {
+	if reqExtPrebid.Data != nil && len(reqExtPrebid.Data.Bidders) != 0 && reqExtPrebid.BidderConfigs == nil {
 		return errors.New(`request.ext.prebid.data.bidders are specified but reqExtPrebid.BidderConfigs are not`)
 	}
-	if len(reqExtPrebid.Data.Bidders) == 0 && reqExtPrebid.BidderConfigs != nil {
+	if reqExtPrebid.Data != nil && len(reqExtPrebid.Data.Bidders) == 0 && reqExtPrebid.BidderConfigs != nil {
 		return errors.New(`request.ext.prebid.data.bidders are not specified but reqExtPrebid.BidderConfigs are`)
 	}
 
