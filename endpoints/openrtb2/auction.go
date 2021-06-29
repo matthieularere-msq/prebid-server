@@ -348,6 +348,10 @@ func (deps *endpointDeps) validateRequest(req *openrtb2.BidRequest) []error {
 		if err := validateCustomRates(bidExt.Prebid.CurrencyConversions); err != nil {
 			return []error{err}
 		}
+
+		if err := validateFPDConfig(bidExt.Prebid); err != nil {
+			return []error{err}
+		}
 	}
 
 	if (req.Site == nil && req.App == nil) || (req.Site != nil && req.App != nil) {
@@ -489,6 +493,23 @@ func (deps *endpointDeps) validateEidPermissions(req *openrtb_ext.ExtRequest, al
 		if err := validateBidders(eid.Bidders, deps.bidderMap, aliases); err != nil {
 			return fmt.Errorf(`request.ext.prebid.data.eidpermissions[%d] contains %v`, i, err)
 		}
+	}
+
+	return nil
+}
+
+func validateFPDConfig(reqExtPrebid openrtb_ext.ExtRequestPrebid) error {
+
+	//Both FPD global and bidder specific permissions are specified
+	if len(reqExtPrebid.Data.Bidders) == 0 && reqExtPrebid.BidderConfigs == nil {
+		return nil
+	}
+
+	if len(reqExtPrebid.Data.Bidders) != 0 && reqExtPrebid.BidderConfigs == nil {
+		return errors.New(`request.ext.prebid.data.bidders are specified but reqExtPrebid.BidderConfigs are not`)
+	}
+	if len(reqExtPrebid.Data.Bidders) == 0 && reqExtPrebid.BidderConfigs != nil {
+		return errors.New(`request.ext.prebid.data.bidders are not specified but reqExtPrebid.BidderConfigs are`)
 	}
 
 	return nil

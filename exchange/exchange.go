@@ -193,6 +193,8 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	// Make our best guess if GDPR applies
 	gdprDefaultValue := e.parseGDPRDefaultValue(r.BidRequest)
 
+	preprocessFPD(r.BidRequest, requestExt.Prebid)
+
 	// Slice of BidRequests, each a copy of the original cleaned to only contain bidder data for the named bidder
 	bidderRequests, privacyLabels, errs := cleanOpenRTBRequests(ctx, r, requestExt, e.gDPR, e.me, gdprDefaultValue, e.privacyConfig, &r.Account)
 
@@ -304,6 +306,31 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 
 	// Build the response
 	return e.buildBidResponse(ctx, liveAdapters, adapterBids, r.BidRequest, adapterExtra, auc, bidResponseExt, cacheInstructions.returnCreative, errs)
+}
+
+func preprocessFPD(request *openrtb2.BidRequest, reqExtPrebid openrtb_ext.ExtRequestPrebid) {
+
+	//every entry in ext.prebid.bidderconfig[].bidders would also need to be in ext.prebid.data.bidders or it will be ignored
+	allConfigBidders := make([]string, 0)
+	for _, bidderConfig := range *reqExtPrebid.BidderConfigs {
+		allConfigBidders = append(allConfigBidders, bidderConfig.Bidders...)
+	}
+	//find intersection
+
+	/*
+
+		foreach element e in array A
+	    insert e into hash table H
+
+		foreach element e in array B
+	    if H contains e
+	        print e
+
+	*/
+
+	//modify imps
+
+	//remove FPD data from request
 }
 
 func (e *exchange) parseGDPRDefaultValue(bidRequest *openrtb2.BidRequest) gdpr.Signal {
