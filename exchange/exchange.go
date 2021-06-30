@@ -27,6 +27,7 @@ import (
 	"github.com/prebid/prebid-server/metrics"
 	"github.com/prebid/prebid-server/openrtb_ext"
 	"github.com/prebid/prebid-server/prebid_cache_client"
+	"github.com/prebid/prebid-server/util/jsonutil"
 )
 
 type ContextKey string
@@ -193,7 +194,7 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	// Make our best guess if GDPR applies
 	gdprDefaultValue := e.parseGDPRDefaultValue(r.BidRequest)
 
-	preprocessFPD(r.BidRequest, requestExt.Prebid)
+	fpdData := preprocessFPD(requestExt.Prebid, r.BidRequest)
 
 	// Slice of BidRequests, each a copy of the original cleaned to only contain bidder data for the named bidder
 	bidderRequests, privacyLabels, errs := cleanOpenRTBRequests(ctx, r, requestExt, e.gDPR, e.me, gdprDefaultValue, e.privacyConfig, &r.Account)
@@ -211,7 +212,7 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	// Get currency rates conversions for the auction
 	conversions := e.getAuctionCurrencyRates(requestExt.Prebid.CurrencyConversions)
 
-	adapterBids, adapterExtra, anyBidsReturned := e.getAllBids(auctionCtx, bidderRequests, bidAdjustmentFactors, conversions, r.Account.DebugAllow, r.GlobalPrivacyControlHeader, debugLog.DebugOverride)
+	adapterBids, adapterExtra, anyBidsReturned := e.getAllBids(auctionCtx, bidderRequests, bidAdjustmentFactors, conversions, r.Account.DebugAllow, r.GlobalPrivacyControlHeader, debugLog.DebugOverride, fpdData)
 
 	var auc *auction
 	var cacheErrs []error
@@ -308,35 +309,33 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	return e.buildBidResponse(ctx, liveAdapters, adapterBids, r.BidRequest, adapterExtra, auc, bidResponseExt, cacheInstructions.returnCreative, errs)
 }
 
-func preprocessFPD(request *openrtb2.BidRequest, reqExtPrebid openrtb_ext.ExtRequestPrebid) {
+func preprocessFPD(reqExtPrebid openrtb_ext.ExtRequestPrebid, request *openrtb2.BidRequest) map[openrtb_ext.BidderName]*openrtb_ext.FPDData {
 
 	if reqExtPrebid.Data == nil || reqExtPrebid.BidderConfigs == nil {
-		return
+		return nil
 	}
+	//map to store bidder configs to process
+	fpdData := make(map[openrtb_ext.BidderName]*openrtb_ext.FPDData)
+
 	//every entry in ext.prebid.bidderconfig[].bidders would also need to be in ext.prebid.data.bidders or it will be ignored
-	allConfigBidders := make([]string, 0)
-	for _, bidderConfig := range *reqExtPrebid.BidderConfigs {
-		allConfigBidders = append(allConfigBidders, bidderConfig.Bidders...)
-	}
-	//find intersection
 	bidderTable := make(map[string]bool) //boolean just  to check existence of the element in map
-	for _, bidder := range allConfigBidders {
+	for _, bidder := range reqExtPrebid.Data.Bidders {
 		bidderTable[bidder] = true
 	}
 
-	biddersToProcess := make([]string, 0)
-	for _, bidder := range reqExtPrebid.Data.Bidders {
-		if bidderTable[bidder] {
-			biddersToProcess = append(biddersToProcess, bidder)
+	for _, bidderConfig := range *reqExtPrebid.BidderConfigs {
+		for _, bidder := range bidderConfig.Bidders {
+			if bidderTable[bidder] {
+				fpdData[openrtb_ext.BidderName(bidder)] = bidderConfig.FPDConfig.FPDData
+			}
 		}
-
 	}
 
-	fmt.Println("Bidders: ", biddersToProcess)
-
-	//modify imps
-
 	//remove FPD data from request
+	request.Ext, _ = jsonutil.DropElement(request.Ext, "bidderconfig")
+	request.Ext, _ = jsonutil.DropElement(request.Ext, "data")
+
+	return fpdData
 }
 
 func (e *exchange) parseGDPRDefaultValue(bidRequest *openrtb2.BidRequest) gdpr.Signal {
@@ -453,7 +452,8 @@ func (e *exchange) getAllBids(
 	conversions currency.Conversions,
 	accountDebugAllowed bool,
 	globalPrivacyControlHeader string,
-	headerDebugAllowed bool) (
+	headerDebugAllowed bool,
+	fpdData map[openrtb_ext.BidderName]*openrtb_ext.FPDData) (
 	map[openrtb_ext.BidderName]*pbsOrtbSeatBid,
 	map[openrtb_ext.BidderName]*seatResponseExtra, bool) {
 	// Set up pointers to the bid results
@@ -476,6 +476,11 @@ func (e *exchange) getAllBids(
 			defer func() {
 				e.me.RecordAdapterRequest(bidderRequest.BidderLabels)
 			}()
+
+			if fpdData[bidderRequest.BidderName] != nil {
+				applyFPD(bidder.BidRequest, fpdData[bidderRequest.BidderName])
+			}
+
 			start := time.Now()
 
 			adjustmentFactor := 1.0
@@ -485,6 +490,7 @@ func (e *exchange) getAllBids(
 			var reqInfo adapters.ExtraRequestInfo
 			reqInfo.PbsEntryPoint = bidderRequest.BidderLabels.RType
 			reqInfo.GlobalPrivacyControlHeader = globalPrivacyControlHeader
+			fmt.Println("Ext: ", string(bidderRequest.BidRequest.Ext))
 			bids, err := e.adapterMap[bidderRequest.BidderCoreName].requestBid(ctx, bidderRequest.BidRequest, bidderRequest.BidderName, adjustmentFactor, conversions, &reqInfo, accountDebugAllowed, headerDebugAllowed)
 
 			// Add in time reporting
@@ -533,6 +539,158 @@ func (e *exchange) getAllBids(
 	}
 
 	return adapterBids, adapterExtra, bidsFound
+}
+
+func applyFPD(bidRequest *openrtb2.BidRequest, fpdData *openrtb_ext.FPDData) {
+	if fpdData.User != nil {
+		if bidRequest.User == nil {
+			bidRequest.User = fpdData.User
+		} else {
+			bidRequest.User = mergeUser(bidRequest.User, fpdData.User)
+		}
+	}
+
+	if fpdData.App != nil {
+		if bidRequest.App == nil {
+			bidRequest.App = fpdData.App
+		} else {
+			bidRequest.App = mergeApp(bidRequest.App, fpdData.App)
+		}
+	}
+
+	if fpdData.Site == nil {
+		if bidRequest.Site == nil {
+			bidRequest.Site = fpdData.Site
+		} else {
+			bidRequest.Site = mergeSite(bidRequest.Site, fpdData.Site)
+		}
+	}
+}
+
+func mergeUser(user *openrtb2.User, fpdUser *openrtb2.User) *openrtb2.User {
+	if fpdUser.ID != "" {
+		user.ID = fpdUser.ID
+	}
+	if fpdUser.BuyerUID != "" {
+		user.BuyerUID = fpdUser.BuyerUID
+	}
+	if fpdUser.Yob != 0 {
+		user.Yob = fpdUser.Yob
+	}
+	if fpdUser.Gender != "" {
+		user.Gender = fpdUser.Gender
+	}
+	if fpdUser.Keywords != "" {
+		user.Keywords = fpdUser.Keywords
+	}
+	if fpdUser.CustomData != "" {
+		user.CustomData = fpdUser.CustomData
+	}
+	if fpdUser.Geo != nil {
+		user.Geo = fpdUser.Geo
+	}
+	if fpdUser.Data != nil {
+		user.Data = fpdUser.Data
+	}
+	if fpdUser.Ext != nil {
+		user.Ext = fpdUser.Ext
+	}
+	return user
+}
+
+func mergeApp(app *openrtb2.App, fpdApp *openrtb2.App) *openrtb2.App {
+	if fpdApp.ID != "" {
+		app.ID = fpdApp.ID
+	}
+	if fpdApp.Name != "" {
+		app.Name = fpdApp.Name
+	}
+	if fpdApp.Bundle != "" {
+		app.Bundle = fpdApp.Bundle
+	}
+	if fpdApp.Domain != "" {
+		app.Domain = fpdApp.Domain
+	}
+	if fpdApp.StoreURL != "" {
+		app.StoreURL = fpdApp.StoreURL
+	}
+	if len(fpdApp.Cat) > 0 {
+		app.Cat = fpdApp.Cat
+	}
+	if len(fpdApp.SectionCat) > 0 {
+		app.SectionCat = fpdApp.SectionCat
+	}
+	if len(fpdApp.PageCat) > 0 {
+		app.PageCat = fpdApp.PageCat
+	}
+	if fpdApp.Ver != "" {
+		app.Ver = fpdApp.Ver
+	}
+	//cannot distinguish 0 and default values for primitive types
+	app.PrivacyPolicy = fpdApp.PrivacyPolicy
+	app.Paid = fpdApp.Paid
+
+	if fpdApp.Publisher != nil {
+		app.Publisher = fpdApp.Publisher
+	}
+	if fpdApp.Content != nil {
+		app.Content = fpdApp.Content
+	}
+	if fpdApp.Keywords != "" {
+		app.Keywords = fpdApp.Keywords
+	}
+	if fpdApp.Ext != nil {
+		app.Ext = fpdApp.Ext
+	}
+
+	return app
+}
+
+func mergeSite(site *openrtb2.Site, fpdSite *openrtb2.Site) *openrtb2.Site {
+
+	if fpdSite.ID != "" {
+		site.ID = fpdSite.ID
+	}
+	if fpdSite.Name != "" {
+		site.Name = fpdSite.Name
+	}
+	if fpdSite.Domain != "" {
+		site.Domain = fpdSite.Domain
+	}
+	if len(fpdSite.Cat) > 0 {
+		site.Cat = fpdSite.Cat
+	}
+	if len(fpdSite.SectionCat) > 0 {
+		site.SectionCat = fpdSite.SectionCat
+	}
+	if len(fpdSite.PageCat) > 0 {
+		site.PageCat = fpdSite.PageCat
+	}
+	if fpdSite.Page != "" {
+		site.Page = fpdSite.Page
+	}
+	if fpdSite.Ref != "" {
+		site.Ref = fpdSite.Ref
+	}
+	if fpdSite.Search != "" {
+		site.Search = fpdSite.Search
+	}
+	site.Mobile = fpdSite.Mobile
+	site.PrivacyPolicy = fpdSite.PrivacyPolicy
+
+	if fpdSite.Publisher != nil {
+		site.Publisher = fpdSite.Publisher
+	}
+	if fpdSite.Content != nil {
+		site.Content = fpdSite.Content
+	}
+	if fpdSite.Keywords != "" {
+		site.Keywords = fpdSite.Keywords
+	}
+	if fpdSite.Ext != nil {
+		site.Ext = fpdSite.Ext
+	}
+	return site
 }
 
 func (e *exchange) recoverSafely(bidderRequests []BidderRequest,

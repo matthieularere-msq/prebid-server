@@ -81,6 +81,14 @@ func TestDropElement(t *testing.T) {
 			errorContains:   "",
 		},
 		{
+			description:     "Drop Parent Element List",
+			input:           []byte(`{"consented_providers_settings":{"consented_providers":[1608,765,492],"test":1},"data": [{"test1":5},{"test2": [1,2,3]}]}`),
+			elementToRemove: "data",
+			output:          []byte(`{"consented_providers_settings":{"consented_providers":[1608,765,492],"test":1}}`),
+			errorExpected:   false,
+			errorContains:   "",
+		},
+		{
 			description:     "Drop Element That Doesn't Exist",
 			input:           []byte(`{"consented_providers_settings": {"consented_providers": [1608,765,492], "test": 1}}`),
 			elementToRemove: "test2",
