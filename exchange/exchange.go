@@ -194,7 +194,8 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	// Make our best guess if GDPR applies
 	gdprDefaultValue := e.parseGDPRDefaultValue(r.BidRequest)
 
-	fpdData := preprocessFPD(requestExt.Prebid, r.BidRequest)
+	fpdData, reqExt := preprocessFPD(requestExt.Prebid, r.BidRequest.Ext)
+	r.BidRequest.Ext = reqExt
 
 	// Slice of BidRequests, each a copy of the original cleaned to only contain bidder data for the named bidder
 	bidderRequests, privacyLabels, errs := cleanOpenRTBRequests(ctx, r, requestExt, e.gDPR, e.me, gdprDefaultValue, e.privacyConfig, &r.Account)
@@ -309,10 +310,10 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	return e.buildBidResponse(ctx, liveAdapters, adapterBids, r.BidRequest, adapterExtra, auc, bidResponseExt, cacheInstructions.returnCreative, errs)
 }
 
-func preprocessFPD(reqExtPrebid openrtb_ext.ExtRequestPrebid, request *openrtb2.BidRequest) map[openrtb_ext.BidderName]*openrtb_ext.FPDData {
+func preprocessFPD(reqExtPrebid openrtb_ext.ExtRequestPrebid, rawRequestExt json.RawMessage) (map[openrtb_ext.BidderName]*openrtb_ext.FPDData, json.RawMessage) {
 
 	if reqExtPrebid.Data == nil || reqExtPrebid.BidderConfigs == nil {
-		return nil
+		return nil, rawRequestExt
 	}
 	//map to store bidder configs to process
 	fpdData := make(map[openrtb_ext.BidderName]*openrtb_ext.FPDData)
@@ -332,10 +333,10 @@ func preprocessFPD(reqExtPrebid openrtb_ext.ExtRequestPrebid, request *openrtb2.
 	}
 
 	//remove FPD data from request
-	request.Ext, _ = jsonutil.DropElement(request.Ext, "bidderconfig")
-	request.Ext, _ = jsonutil.DropElement(request.Ext, "data")
+	rawRequestExt, _ = jsonutil.DropElement(rawRequestExt, "bidderconfig")
+	rawRequestExt, _ = jsonutil.DropElement(rawRequestExt, "data")
 
-	return fpdData
+	return fpdData, rawRequestExt
 }
 
 func (e *exchange) parseGDPRDefaultValue(bidRequest *openrtb2.BidRequest) gdpr.Signal {
@@ -477,8 +478,10 @@ func (e *exchange) getAllBids(
 				e.me.RecordAdapterRequest(bidderRequest.BidderLabels)
 			}()
 
-			if fpdData[bidderRequest.BidderName] != nil {
-				applyFPD(bidder.BidRequest, fpdData[bidderRequest.BidderName])
+			if fpdData != nil && fpdData[bidderRequest.BidderName] != nil {
+				//FPD needs to be applied. Bid request may be modified.
+				//To save original bid request new copy will be returned
+				bidderRequest.BidRequest = applyFPD(bidderRequest.BidRequest, fpdData[bidderRequest.BidderName])
 			}
 
 			start := time.Now()
@@ -541,156 +544,168 @@ func (e *exchange) getAllBids(
 	return adapterBids, adapterExtra, bidsFound
 }
 
-func applyFPD(bidRequest *openrtb2.BidRequest, fpdData *openrtb_ext.FPDData) {
+func applyFPD(bidRequest *openrtb2.BidRequest, fpdData *openrtb_ext.FPDData) *openrtb2.BidRequest {
+	newBidRequest := &bidRequest
+
 	if fpdData.User != nil {
 		if bidRequest.User == nil {
-			bidRequest.User = fpdData.User
+			(*newBidRequest).User = fpdData.User
 		} else {
-			bidRequest.User = mergeUser(bidRequest.User, fpdData.User)
+			(*newBidRequest).User = mergeUser(*bidRequest.User, fpdData.User)
 		}
 	}
 
 	if fpdData.App != nil {
 		if bidRequest.App == nil {
-			bidRequest.App = fpdData.App
+			(*newBidRequest).App = fpdData.App
 		} else {
-			bidRequest.App = mergeApp(bidRequest.App, fpdData.App)
+			(*newBidRequest).App = mergeApp(*bidRequest.App, fpdData.App)
 		}
 	}
 
-	if fpdData.Site == nil {
+	if fpdData.Site != nil {
 		if bidRequest.Site == nil {
-			bidRequest.Site = fpdData.Site
+			(*newBidRequest).Site = fpdData.Site
 		} else {
-			bidRequest.Site = mergeSite(bidRequest.Site, fpdData.Site)
+			(*newBidRequest).Site = mergeSite(*bidRequest.Site, fpdData.Site)
 		}
 	}
+
+	return *newBidRequest
 }
 
-func mergeUser(user *openrtb2.User, fpdUser *openrtb2.User) *openrtb2.User {
+func mergeUser(user openrtb2.User, fpdUser *openrtb2.User) *openrtb2.User {
+	temp := user
+	newUser := temp
+
 	if fpdUser.ID != "" {
-		user.ID = fpdUser.ID
+		newUser.ID = fpdUser.ID
 	}
 	if fpdUser.BuyerUID != "" {
-		user.BuyerUID = fpdUser.BuyerUID
+		newUser.BuyerUID = fpdUser.BuyerUID
 	}
 	if fpdUser.Yob != 0 {
-		user.Yob = fpdUser.Yob
+		newUser.Yob = fpdUser.Yob
 	}
 	if fpdUser.Gender != "" {
-		user.Gender = fpdUser.Gender
+		newUser.Gender = fpdUser.Gender
 	}
 	if fpdUser.Keywords != "" {
-		user.Keywords = fpdUser.Keywords
+		newUser.Keywords = fpdUser.Keywords
 	}
 	if fpdUser.CustomData != "" {
-		user.CustomData = fpdUser.CustomData
+		newUser.CustomData = fpdUser.CustomData
 	}
 	if fpdUser.Geo != nil {
-		user.Geo = fpdUser.Geo
+		newUser.Geo = fpdUser.Geo
 	}
 	if fpdUser.Data != nil {
-		user.Data = fpdUser.Data
+		newUser.Data = fpdUser.Data
 	}
 	if fpdUser.Ext != nil {
-		user.Ext = fpdUser.Ext
+		newUser.Ext = fpdUser.Ext
 	}
-	return user
+	return &newUser
 }
 
-func mergeApp(app *openrtb2.App, fpdApp *openrtb2.App) *openrtb2.App {
+func mergeApp(app openrtb2.App, fpdApp *openrtb2.App) *openrtb2.App {
+	temp := app
+	newApp := temp
+
 	if fpdApp.ID != "" {
-		app.ID = fpdApp.ID
+		newApp.ID = fpdApp.ID
 	}
 	if fpdApp.Name != "" {
-		app.Name = fpdApp.Name
+		newApp.Name = fpdApp.Name
 	}
 	if fpdApp.Bundle != "" {
-		app.Bundle = fpdApp.Bundle
+		newApp.Bundle = fpdApp.Bundle
 	}
 	if fpdApp.Domain != "" {
-		app.Domain = fpdApp.Domain
+		newApp.Domain = fpdApp.Domain
 	}
 	if fpdApp.StoreURL != "" {
-		app.StoreURL = fpdApp.StoreURL
+		newApp.StoreURL = fpdApp.StoreURL
 	}
 	if len(fpdApp.Cat) > 0 {
-		app.Cat = fpdApp.Cat
+		newApp.Cat = fpdApp.Cat
 	}
 	if len(fpdApp.SectionCat) > 0 {
-		app.SectionCat = fpdApp.SectionCat
+		newApp.SectionCat = fpdApp.SectionCat
 	}
 	if len(fpdApp.PageCat) > 0 {
-		app.PageCat = fpdApp.PageCat
+		newApp.PageCat = fpdApp.PageCat
 	}
 	if fpdApp.Ver != "" {
-		app.Ver = fpdApp.Ver
+		newApp.Ver = fpdApp.Ver
 	}
 	//cannot distinguish 0 and default values for primitive types
-	app.PrivacyPolicy = fpdApp.PrivacyPolicy
-	app.Paid = fpdApp.Paid
+	newApp.PrivacyPolicy = fpdApp.PrivacyPolicy
+	newApp.Paid = fpdApp.Paid
 
 	if fpdApp.Publisher != nil {
-		app.Publisher = fpdApp.Publisher
+		newApp.Publisher = fpdApp.Publisher
 	}
 	if fpdApp.Content != nil {
-		app.Content = fpdApp.Content
+		newApp.Content = fpdApp.Content
 	}
 	if fpdApp.Keywords != "" {
-		app.Keywords = fpdApp.Keywords
+		newApp.Keywords = fpdApp.Keywords
 	}
 	if fpdApp.Ext != nil {
-		app.Ext = fpdApp.Ext
+		newApp.Ext = fpdApp.Ext
 	}
 
-	return app
+	return &newApp
 }
 
-func mergeSite(site *openrtb2.Site, fpdSite *openrtb2.Site) *openrtb2.Site {
+func mergeSite(site openrtb2.Site, fpdSite *openrtb2.Site) *openrtb2.Site {
+	temp := site
+	newSite := temp
 
 	if fpdSite.ID != "" {
-		site.ID = fpdSite.ID
+		newSite.ID = fpdSite.ID
 	}
 	if fpdSite.Name != "" {
-		site.Name = fpdSite.Name
+		newSite.Name = fpdSite.Name
 	}
 	if fpdSite.Domain != "" {
-		site.Domain = fpdSite.Domain
+		newSite.Domain = fpdSite.Domain
 	}
 	if len(fpdSite.Cat) > 0 {
-		site.Cat = fpdSite.Cat
+		newSite.Cat = fpdSite.Cat
 	}
 	if len(fpdSite.SectionCat) > 0 {
-		site.SectionCat = fpdSite.SectionCat
+		newSite.SectionCat = fpdSite.SectionCat
 	}
 	if len(fpdSite.PageCat) > 0 {
-		site.PageCat = fpdSite.PageCat
+		newSite.PageCat = fpdSite.PageCat
 	}
 	if fpdSite.Page != "" {
-		site.Page = fpdSite.Page
+		newSite.Page = fpdSite.Page
 	}
 	if fpdSite.Ref != "" {
-		site.Ref = fpdSite.Ref
+		newSite.Ref = fpdSite.Ref
 	}
 	if fpdSite.Search != "" {
-		site.Search = fpdSite.Search
+		newSite.Search = fpdSite.Search
 	}
-	site.Mobile = fpdSite.Mobile
-	site.PrivacyPolicy = fpdSite.PrivacyPolicy
+	newSite.Mobile = fpdSite.Mobile
+	newSite.PrivacyPolicy = fpdSite.PrivacyPolicy
 
 	if fpdSite.Publisher != nil {
-		site.Publisher = fpdSite.Publisher
+		newSite.Publisher = fpdSite.Publisher
 	}
 	if fpdSite.Content != nil {
-		site.Content = fpdSite.Content
+		newSite.Content = fpdSite.Content
 	}
 	if fpdSite.Keywords != "" {
-		site.Keywords = fpdSite.Keywords
+		newSite.Keywords = fpdSite.Keywords
 	}
 	if fpdSite.Ext != nil {
-		site.Ext = fpdSite.Ext
+		newSite.Ext = fpdSite.Ext
 	}
-	return site
+	return &newSite
 }
 
 func (e *exchange) recoverSafely(bidderRequests []BidderRequest,
