@@ -194,8 +194,9 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	// Make our best guess if GDPR applies
 	gdprDefaultValue := e.parseGDPRDefaultValue(r.BidRequest)
 
-	fpdData, reqExt := preprocessFPD(requestExt.Prebid, r.BidRequest.Ext)
+	fpdData, reqExt, reqExtPrebid := preprocessFPD(requestExt.Prebid, r.BidRequest.Ext)
 	r.BidRequest.Ext = reqExt
+	requestExt.Prebid = reqExtPrebid
 
 	// Slice of BidRequests, each a copy of the original cleaned to only contain bidder data for the named bidder
 	bidderRequests, privacyLabels, errs := cleanOpenRTBRequests(ctx, r, requestExt, e.gDPR, e.me, gdprDefaultValue, e.privacyConfig, &r.Account)
@@ -310,10 +311,10 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	return e.buildBidResponse(ctx, liveAdapters, adapterBids, r.BidRequest, adapterExtra, auc, bidResponseExt, cacheInstructions.returnCreative, errs)
 }
 
-func preprocessFPD(reqExtPrebid openrtb_ext.ExtRequestPrebid, rawRequestExt json.RawMessage) (map[openrtb_ext.BidderName]*openrtb_ext.FPDData, json.RawMessage) {
+func preprocessFPD(reqExtPrebid openrtb_ext.ExtRequestPrebid, rawRequestExt json.RawMessage) (map[openrtb_ext.BidderName]*openrtb_ext.FPDData, json.RawMessage, openrtb_ext.ExtRequestPrebid) {
 
 	if reqExtPrebid.Data == nil || reqExtPrebid.BidderConfigs == nil {
-		return nil, rawRequestExt
+		return nil, rawRequestExt, reqExtPrebid
 	}
 	//map to store bidder configs to process
 	fpdData := make(map[openrtb_ext.BidderName]*openrtb_ext.FPDData)
@@ -332,11 +333,14 @@ func preprocessFPD(reqExtPrebid openrtb_ext.ExtRequestPrebid, rawRequestExt json
 		}
 	}
 
-	//remove FPD data from request
+	//remove FPD data from request and from request extension
 	rawRequestExt, _ = jsonutil.DropElement(rawRequestExt, "bidderconfig")
 	rawRequestExt, _ = jsonutil.DropElement(rawRequestExt, "data")
 
-	return fpdData, rawRequestExt
+	reqExtPrebid.BidderConfigs = nil
+	reqExtPrebid.Data.Bidders = nil
+
+	return fpdData, rawRequestExt, reqExtPrebid
 }
 
 func (e *exchange) parseGDPRDefaultValue(bidRequest *openrtb2.BidRequest) gdpr.Signal {
