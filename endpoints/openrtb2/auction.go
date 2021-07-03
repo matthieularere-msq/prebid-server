@@ -36,6 +36,7 @@ import (
 	"github.com/prebid/prebid-server/usersync"
 	"github.com/prebid/prebid-server/util/httputil"
 	"github.com/prebid/prebid-server/util/iputil"
+	"github.com/prebid/prebid-server/util/jsonutil"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/text/currency"
 )
@@ -258,6 +259,13 @@ func (deps *endpointDeps) parseRequest(httpRequest *http.Request) (req *openrtb2
 		return
 	}
 
+	//If {site,app,user}.data exists, merge it into {site,app,user}.ext.data and remove {site,app,user}.data
+	requestJson, err = moveFPDData(requestJson)
+	if err != nil {
+		errs = []error{err}
+		return
+	}
+
 	if err := json.Unmarshal(requestJson, req); err != nil {
 		errs = []error{err}
 		return
@@ -279,6 +287,47 @@ func (deps *endpointDeps) parseRequest(httpRequest *http.Request) (req *openrtb2
 	}
 
 	return
+}
+
+func moveFPDData(request []byte) ([]byte, error) {
+	//If {site,app,user}.data exists, merge it into {site,app,user}.ext.data and remove {site,app,user}.data
+	siteData, _, _, err := jsonparser.Get(request, "site", "data")
+	if err != nil && err != jsonparser.KeyPathNotFoundError {
+		return request, err
+	}
+	appData, _, _, err := jsonparser.Get(request, "app", "data")
+	if err != nil && err != jsonparser.KeyPathNotFoundError {
+		return request, err
+	}
+
+	userData, _, _, err := jsonparser.Get(request, "user", "data")
+	if err != nil && err != jsonparser.KeyPathNotFoundError {
+		return request, err
+	}
+
+	if siteData != nil {
+		request, err = jsonutil.DropElement(request, "site", "data") // modify to nested objects
+		if err != nil {
+			return request, err
+		}
+		//TODO: merge siteData to into {site,app,user}.ext.data  //!! write func to set nested object
+	}
+	if appData != nil {
+		request, err = jsonutil.DropElement(request, "app", "data")
+		if err != nil {
+			return request, err
+		}
+		//TODO: merge appData to into {site,app,user}.ext.data
+	}
+	if userData != nil {
+		request, err = jsonutil.DropElement(request, "user", "data")
+		if err != nil {
+			return request, err
+		}
+		//TODO: merge userData to into {site,app,user}.ext.data
+	}
+	return request, nil
+
 }
 
 // parseTimeout returns parses tmax from the requestJson, or returns the default if it doesn't exist.

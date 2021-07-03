@@ -128,3 +128,63 @@ func TestDropElement(t *testing.T) {
 
 	}
 }
+
+func TestDropNestedElementSingleOccurrence(t *testing.T) {
+	input := []byte(`{"consented_providers_settings":{"consented_providers":[1608,765,492],"test":1},"data": [{"test1":5},{"test2": [1,2,3]}]}`)
+	output := []byte(`{"consented_providers_settings":{"consented_providers":[1608,765,492]},"data": [{"test1":5},{"test2": [1,2,3]}]}`)
+
+	res, err := DropElement(input, "consented_providers_settings", "test")
+
+	assert.NoError(t, err, "Error should be nil")
+	assert.Equal(t, output, res, "Result is incorrect")
+}
+
+func TestDropNestedElementMultipleOccurrence(t *testing.T) {
+	input := []byte(`{"consented_providers_settings":{"consented_providers":[1608,765,492],"test":1},"data": [{"test":5},{"test": [1,2,3]}]}`)
+	output := []byte(`{"consented_providers_settings":{"consented_providers":[1608,765,492]},"data": [{"test":5},{"test": [1,2,3]}]}`)
+
+	res, err := DropElement(input, "consented_providers_settings", "test")
+
+	assert.NoError(t, err, "Error should be nil")
+	assert.Equal(t, output, res, "Result is incorrect")
+}
+
+func TestDropNestedStructureSingleOccurrence(t *testing.T) {
+	input := []byte(`{"consented_providers":{"providers":[1608,765,492],"test":{"nested":true}},"data": [{"test":5},{"test": [1,2,3]}]}`)
+	output := []byte(`{"consented_providers":{"providers":[1608,765,492]},"data": [{"test":5},{"test": [1,2,3]}]}`)
+
+	res, err := DropElement(input, "consented_providers", "test")
+
+	assert.NoError(t, err, "Error should be nil")
+	assert.Equal(t, output, res, "Result is incorrect")
+}
+
+func TestDropNestedStructureSingleOccurrenceDeepNested(t *testing.T) {
+	input := []byte(`{"consented_providers":{"providers":[1608,765,492],"test":{"nested":true, "nested2": {"test6": 123}}},"data": [{"test":5},{"test": [1,2,3]}]}`)
+	output := []byte(`{"consented_providers":{"providers":[1608,765,492],"test":{"nested":true, "nested2": {}}},"data": [{"test":5},{"test": [1,2,3]}]}`)
+
+	res, err := DropElement(input, "consented_providers", "test6")
+
+	assert.NoError(t, err, "Error should be nil")
+	assert.Equal(t, output, res, "Result is incorrect")
+}
+
+func TestDropNestedStructureSingleOccurrenceDeepNestedFullPath(t *testing.T) {
+	input := []byte(`{"consented_providers":{"providers":[1608,765,492],"test":{"nested":true,"nested2": {"test6": 123}}},"data": [{"test":5},{"test": [1,2,3]}]}`)
+	output := []byte(`{"consented_providers":{"providers":[1608,765,492],"test":{"nested2": {"test6": 123}}},"data": [{"test":5},{"test": [1,2,3]}]}`)
+
+	res, err := DropElement(input, "consented_providers", "test", "nested")
+
+	assert.NoError(t, err, "Error should be nil")
+	assert.Equal(t, output, res, "Result is incorrect")
+}
+
+func TestDropNestedStructureDoesntExist(t *testing.T) {
+	input := []byte(`{"consented_providers":{"providers":[1608,765,492]},"test":{"nested":true}},"data": [{"test":5},{"test": [1,2,3]}]}`)
+	output := []byte(`{"consented_providers":{"providers":[1608,765,492]},"test":{"nested":true}},"data": [{"test":5},{"test": [1,2,3]}]}`)
+
+	res, err := DropElement(input, "consented_providers", "test2")
+
+	assert.NoError(t, err, "Error should be nil")
+	assert.Equal(t, output, res, "Result is incorrect")
+}
